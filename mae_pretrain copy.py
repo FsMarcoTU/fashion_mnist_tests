@@ -175,4 +175,4 @@ if __name__ == '__main__':
 
         # Command zum Starten:
         # python mae_pretrain.py --load_model_path vit-t-mae.pt --start_epoch <xx>
-        # Last Epoch: 29
+        # Last Epoch: 87
