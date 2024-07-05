@@ -4,32 +4,6 @@ from torch import nn
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 
-
-# Complex layers
-
-def apply_complex(fr, fi, input, dtype=torch.complex64):
-    return (fr(input.real)-fi(input.imag)).type(dtype) \
-        + 1j*(fr(input.imag)+fi(input.real)).type(dtype)
-
-class ComplexLinear(nn.Module):
-    def __init__(self, in_features, out_features):
-        super().__init__()
-        self.fc_r = nn.Linear(in_features, out_features)
-        self.fc_i = nn.Linear(in_features, out_features)
-
-    def forward(self, inp):
-        return apply_complex(self.fc_r, self.fc_i, inp)
-    
-
-class TwoChannelsToComplex(nn.Module):
-    def __init__(self):
-        super(TwoChannelsToComplex, self).__init__()
-
-    def forward(self, x):
-        real, imag = torch.chunk(x, 2, dim=1)
-        complex_tensor = torch.complex(real.squeeze(1), imag.squeeze(1))
-        return complex_tensor
-
 # helpers
 
 def pair(t):
@@ -43,7 +17,7 @@ class FeedForward(nn.Module):
         self.net = nn.Sequential(
             nn.LayerNorm(dim),
             nn.Linear(dim, hidden_dim),
-            nn.GELU(),
+            nn.GELU(), # Similar to RELU, but smoother with da dip before 0
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, dim),
             nn.Dropout(dropout)
@@ -77,17 +51,24 @@ class Attention(nn.Module):
         x = self.norm(x)
 
         qkv = self.to_qkv(x).chunk(3, dim = -1)
+        # rearrangee from batch_size,sequence length, head_number,  head_dim, to b h n d
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.heads), qkv)
 
+        # Transpose k to match the dimensions for matrix multiplication
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
 
         attn = self.attend(dots)
         attn = self.dropout(attn)
 
         out = torch.matmul(attn, v)
-        out = rearrange(out, 'b h n d -> b n (h d)')
+        
+        out = rearrange(out, 'b h n d -> b n (h d)') 
         return self.to_out(out)
 
+
+# Every attention layer consists of multiple attention heads that work in parallel. Their output is concatenated 
+# and then put into a single feed forward network
+# This process is done for the number of layers we specify.
 class Transformer(nn.Module):
     def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout = 0.):
         super().__init__()
@@ -134,11 +115,7 @@ class ViT(nn.Module):
         self.pool = pool
         self.to_latent = nn.Identity()
 
-        #self.mlp_head = nn.Linear(dim, num_classes)
-
-        self.mlp_head = ComplexLinear(dim, num_classes)
-        self.convert = TwoChannelsToComplex()
-
+        self.mlp_head = nn.Linear(dim, num_classes)
 
     def forward(self, img):
         x = self.to_patch_embedding(img)
@@ -154,7 +131,5 @@ class ViT(nn.Module):
         x = x.mean(dim = 1) if self.pool == 'mean' else x[:, 0]
 
         x = self.to_latent(x)
-        print(x.shape)
-        x = self.convert(x)
-        print(x.shape)
-        return torch.abs(self.mlp_head(x))
+        return self.mlp_head(x)
+    

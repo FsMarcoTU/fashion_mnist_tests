@@ -1,5 +1,6 @@
 import torch
 import random
+import math 
 def phase_shift_fourier(fourier_image, x=1.0, y=1.0):
     """
     Perform a random phase shift on a Fourier-image, constrained by maximum values.
@@ -32,7 +33,7 @@ def phase_shift_fourier(fourier_image, x=1.0, y=1.0):
     return shifted_fourier_image
 
 
-def concentric_square_bandwidth_filter(fft, min_size=4, max_size=None, band_width=2):
+def concentric_square_bandwidth_filter(fft, min_size=4, max_size=None, band_width=None):
     """
     Apply a bandwidth filter to remove a random concentric square band from the frequency spectrum.
     Both magnitude and phase are set to zero in the filtered band.
@@ -41,7 +42,7 @@ def concentric_square_bandwidth_filter(fft, min_size=4, max_size=None, band_widt
     fft (torch.Tensor): Complex-valued frequency representation of an image (centered)
     min_size (int): Minimum size of the inner square of the band to remove
     max_size (int): Maximum size of the inner square of the band to remove (default: image size - 2*band_width)
-    band_width (int): Width of the band to remove
+    band_width (int or None): Width of the band to remove. If None, a random width between 0 and 1/3 of the spectrum dimension is chosen.
     
     Returns:
     torch.Tensor: Filtered frequency spectrum
@@ -50,9 +51,14 @@ def concentric_square_bandwidth_filter(fft, min_size=4, max_size=None, band_widt
     assert h == w, "Input must be square"
     center = h // 2
     
+    # If band_width is None, choose a random width between 0 and 1/3 of the spectrum dimension
+    if band_width is None:
+        max_band_width = h // 3
+        band_width = random.randint(1, max_band_width)
+    
     if max_size is None:
         max_size = h - 2*band_width
-    #a
+    
     # Ensure max_size is not larger than image size minus twice the band width
     max_size = min(max_size, h - 2*band_width)
     
@@ -73,12 +79,11 @@ def concentric_square_bandwidth_filter(fft, min_size=4, max_size=None, band_widt
     mask = torch.ones_like(fft, dtype=torch.bool)
     mask[outer_start:outer_end, outer_start:outer_end] = False
     mask[inner_start:inner_end, inner_start:inner_end] = True
-
+    
     # Apply the mask to the frequency spectrum
     filtered_fft = torch.where(mask, fft, torch.complex(torch.zeros_like(fft.real), torch.zeros_like(fft.imag)))
-
+    
     return filtered_fft
-
 
 def mask_frequency_spectrum(spectrum, max_mask_percentage=75):
     """
@@ -202,3 +207,58 @@ def rearrange_matrix(original_matrix, patch_size=7):
             result[row_start:row_start + patch_size, col_start:col_start + patch_size] = patches[patch_index]
     
     return result
+
+
+
+def mask_frequency_spectrum_patches(spectrum, patch_size, max_mask_percentage=75):
+    """
+    This function masks out full patches of the frequency spectrum.
+    
+    Input:
+    - spectrum: The frequency spectrum (centered or uncentered) as a 2D tensor
+    - patch_size: The size of each square patch
+    - max_mask_percentage: Maximum percentage of patches to mask (default: 75)
+    
+    Output:
+    - The masked frequency spectrum
+    """
+    # Ensure the max_mask_percentage is between 0 and 100
+    max_mask_percentage = torch.clamp(torch.tensor(max_mask_percentage), 0, 100)
+    
+    # Calculate the number of patches
+    h, w = spectrum.shape
+    num_patches_h = math.ceil(h / patch_size)
+    num_patches_w = math.ceil(w / patch_size)
+    total_patches = num_patches_h * num_patches_w
+    
+    # Generate a random mask percentage
+    mask_percentage = torch.rand(1) * max_mask_percentage
+    
+    # Calculate the number of patches to mask
+    num_masked_patches = math.ceil(total_patches * mask_percentage.item() / 100)
+    
+    # Create a mask for patches
+    patch_mask = torch.ones(num_patches_h, num_patches_w, dtype=torch.bool)
+    flat_patch_mask = patch_mask.view(-1)
+    
+    # Randomly select patches to mask
+    mask_indices = torch.randperm(total_patches)[:num_masked_patches]
+    flat_patch_mask[mask_indices] = False
+    patch_mask = flat_patch_mask.view(num_patches_h, num_patches_w)
+    
+    # Create the full mask
+    mask = torch.ones_like(spectrum, dtype=torch.bool)
+    for i in range(num_patches_h):
+        for j in range(num_patches_w):
+            if not patch_mask[i, j]:
+                top = i * patch_size
+                left = j * patch_size
+                bottom = min((i + 1) * patch_size, h)
+                right = min((j + 1) * patch_size, w)
+                mask[top:bottom, left:right] = False
+    
+    # Apply the mask
+    masked_spectrum = spectrum.clone()
+    masked_spectrum[~mask] = 0
+    
+    return masked_spectrum
